@@ -551,7 +551,7 @@ bool TryExec(
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-FString Git_GetRevision()
+FString Git_GetRevisionChecked()
 {
 	const FString Revision = Exec("git rev-parse HEAD");
 	const FString ShortRevision = Exec("git rev-parse --short HEAD");
@@ -564,6 +564,11 @@ FString Git_GetRevision()
 	}
 
 	return Revision.Left(9);
+}
+
+FString Git_GetRevision()
+{
+	return Exec("git rev-parse --short HEAD");
 }
 
 int32 Git_GetChangelist()
@@ -748,6 +753,12 @@ FString GetEnginePath(
 	const FUnrealVersion& UnrealVersion,
 	const EEngineType EngineType)
 {
+	TOptional<FString> EnginePathOverride = TryGetCommandLineValue("EnginePath");
+	if (EnginePathOverride.IsSet())
+	{
+		return EnginePathOverride.GetValue();
+	}
+
 	const FString Path = INLINE_LAMBDA
 	{
 		static const TArray<FString> EngineDirectories =
@@ -869,97 +880,6 @@ FString RunUAT(
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-FHttpGet::~FHttpGet()
-{
-	LOG("GET %s", *Url);
-
-	if (!Headers.IsEmpty())
-	{
-		LOG("\tHeaders:");
-
-		for (const auto& It : Headers)
-		{
-			LOG("\t\t%s: %s", *It.Key, *It.Value);
-		}
-	}
-
-	if (!QueryParameters.IsEmpty())
-	{
-		LOG("\tQuery parameters:");
-
-		for (const auto& It : QueryParameters)
-		{
-			LOG("\t\t%s: %s", *It.Key, *It.Value);
-		}
-	}
-
-	const TSharedRef<IHttpRequest> Request = FHttpModule::Get().CreateRequest();
-	Request->SetVerb("GET");
-
-	for (const auto& It : Headers)
-	{
-		Request->SetHeader(It.Key, It.Value);
-	}
-
-	FString FinalUrl = Url;
-	if (QueryParameters.Num() > 0)
-	{
-		FinalUrl += "?";
-
-		for (const auto& It : QueryParameters)
-		{
-			if (!FinalUrl.EndsWith("?"))
-			{
-				FinalUrl += "&";
-			}
-
-			if (It.Key != FPlatformHttp::UrlEncode(It.Key))
-			{
-				LOG_FATAL("Invalid query parameter key: %s", *It.Key);
-			}
-
-			FinalUrl += It.Key + "=" + FPlatformHttp::UrlEncode(It.Value);
-		}
-	}
-
-	Request->SetURL(FinalUrl);
-
-	Request->ProcessRequest();
-
-	while (Request->GetStatus() == EHttpRequestStatus::Processing)
-	{
-		FHttpModule::Get().GetHttpManager().Tick(0.f);
-	}
-
-	const TSharedPtr<IHttpResponse> Response = Request->GetResponse();
-	if (!Response)
-	{
-		LOG_FATAL("GET failed: Failed to connect");
-	}
-
-	if (Response->GetResponseCode() != 200)
-	{
-		LOG_FATAL("GET failed: %d\n%s",
-			Response->GetResponseCode(),
-			*Response->GetContentAsString());
-	}
-
-	check(Request->GetStatus() == EHttpRequestStatus::Succeeded);
-
-	LOG("RESPONSE: %d\n%s",
-		Response->GetResponseCode(),
-		*Response->GetContentAsString());
-}
-
-FHttpGet Http_Get(const FString& Url)
-{
-	return FHttpGet(Url);
-}
-
-///////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////
-
 FHttpPost::~FHttpPost()
 {
 	LOG("POST %s", *Url);
@@ -1062,6 +982,123 @@ FHttpPost Http_Post(const FString& Url)
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+FString FHttpGet::ExecuteAndReturnString()
+{
+	TSharedPtr<IHttpResponse> Response = ExecuteAndReturnResponse();
+
+	LOG("RESPONSE: %d\n%s",
+		Response->GetResponseCode(),
+		*Response->GetContentAsString());
+
+	return Response->GetContentAsString();
+}
+
+TArray<uint8> FHttpGet::ExecuteAndReturnArray()
+{
+	TSharedPtr<IHttpResponse> Response = ExecuteAndReturnResponse();
+	return Response->GetContent();
+}
+
+TSharedPtr<IHttpResponse> FHttpGet::ExecuteAndReturnResponse()
+{
+	LOG("GET %s", *Url);
+
+	if (!Headers.IsEmpty())
+	{
+		LOG("\tHeaders:");
+
+		for (const auto& It : Headers)
+		{
+			LOG("\t\t%s: %s", *It.Key, *It.Value);
+		}
+	}
+
+	if (!QueryParameters.IsEmpty())
+	{
+		LOG("\tQuery parameters:");
+
+		for (const auto& It : QueryParameters)
+		{
+			LOG("\t\t%s: %s", *It.Key, *It.Value);
+		}
+	}
+
+	if (!PrivateContent.IsEmpty())
+	{
+		LOG("%s", *PrivateContent);
+	}
+
+	const TSharedRef<IHttpRequest> Request = FHttpModule::Get().CreateRequest();
+	Request->SetVerb("GET");
+
+	for (const auto& It : Headers)
+	{
+		Request->SetHeader(It.Key, It.Value);
+	}
+
+	FString FinalUrl = Url;
+	if (QueryParameters.Num() > 0)
+	{
+		FinalUrl += "?";
+
+		for (const auto& It : QueryParameters)
+		{
+			if (!FinalUrl.EndsWith("?"))
+			{
+				FinalUrl += "&";
+			}
+
+			if (It.Key != FPlatformHttp::UrlEncode(It.Key))
+			{
+				LOG_FATAL("Invalid query parameter key: %s", *It.Key);
+			}
+
+			FinalUrl += It.Key + "=" + FPlatformHttp::UrlEncode(It.Value);
+		}
+	}
+
+	Request->SetURL(FinalUrl);
+
+	if (!PrivateContent.IsEmpty())
+	{
+		Request->SetContentAsString(PrivateContent);
+	}
+
+	Request->ProcessRequest();
+
+	while (Request->GetStatus() == EHttpRequestStatus::Processing)
+	{
+		FHttpModule::Get().GetHttpManager().Tick(0.f);
+	}
+
+	const TSharedPtr<IHttpResponse> Response = Request->GetResponse();
+	if (!Response)
+	{
+		LOG_FATAL("GET failed: Failed to connect");
+	}
+
+	if (Response->GetResponseCode() != 200 &&
+		Response->GetResponseCode() != 201)
+	{
+		LOG_FATAL("GET failed: %d\n%s",
+			Response->GetResponseCode(),
+			*Response->GetContentAsString());
+	}
+
+	check(Request->GetStatus() == EHttpRequestStatus::Succeeded);
+
+	return Response;
+
+	LOG("RESPONSE: %d\n%s",
+		Response->GetResponseCode(),
+		*Response->GetContentAsString());
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+
 FString GForgeSlackBuildOpsUrl;
 bool GForgeIsSendingSlackMessage;
 
@@ -1106,6 +1143,7 @@ void PostFatalSlackMessage(
 {
 	FString NewMessage = "*" + GForgeCmd + " failed*\n";
 
+	/*
 	FString PullRequestName;
 	FString PullRequestUrl;
 	if (TryGetPullRequestInfo(PullRequestName, PullRequestUrl))
@@ -1114,6 +1152,7 @@ void PostFatalSlackMessage(
 	}
 
 	NewMessage += GForgeGitHubUrl + "\n";
+	*/
 	NewMessage += Message;
 
 	PostSlackMessage(NewMessage, Attachments);
@@ -1129,9 +1168,7 @@ void CheckIsValidPath(const FString& Path)
 {
 	if (IsWindows())
 	{
-		if (!Path.StartsWith("C:") &&
-			!Path.StartsWith("D:") &&
-			!Path.StartsWith("Z:"))
+		if (!(Path.Len() >= 2 && FChar::IsAlpha(Path[0]) && Path[1] == ':'))
 		{
 			LOG_FATAL("Invalid path: %s", *Path);
 		}

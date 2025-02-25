@@ -7,6 +7,8 @@
 #include "Commandlets/Commandlet.h"
 #include "Forge.generated.h"
 
+class IHttpResponse;
+
 struct FForgeLambdaCaller
 {
 	template<typename T>
@@ -99,10 +101,6 @@ FORGE_API FString Exec(
 	const FString& CommandLine,
 	const TSet<int32>& ValidExitCodes = { 0 });
 
-FORGE_API FString Exec_PostErrors(
-	const FString& CommandLine,
-	const TSet<int32>& ValidExitCodes = { 0 });
-
 FORGE_API bool TryExec(
 	const FString& CommandLine,
 	const TSet<int32>& ValidExitCodes = { 0 });
@@ -116,6 +114,7 @@ FORGE_API bool TryExec(
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
+FORGE_API FString Git_GetRevisionChecked();
 FORGE_API FString Git_GetRevision();
 FORGE_API int32 Git_GetChangelist();
 FORGE_API void Git_Fetch();
@@ -131,10 +130,6 @@ FORGE_API TArray<FString> GetCommandLineArray(const FString& Name);
 FORGE_API TOptional<FString> TryGetCommandLineValue(const FString& Name);
 
 FORGE_API FString GetServerToken();
-
-FORGE_API bool TryGetPullRequestInfo(
-	FString& OutName,
-	FString& OutUrl);
 
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
@@ -185,39 +180,6 @@ FORGE_API FString RunUAT(
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
 
-class FORGE_API FHttpGet
-{
-public:
-	explicit FHttpGet(const FString& Url)
-		: Url(Url)
-	{
-	}
-	~FHttpGet();
-
-	FHttpGet& Header(const FString& Key, const FString& Value)
-	{
-		check(!Headers.Contains(Key));
-		Headers.Add(Key, Value);
-		return *this;
-	}
-	FHttpGet& QueryParameter(const FString& Key, const FString& Value)
-	{
-		check(!QueryParameters.Contains(Key));
-		QueryParameters.Add(Key, Value);
-		return *this;
-	}
-
-private:
-	const FString Url;
-	TMap<FString, FString> Headers;
-	TMap<FString, FString> QueryParameters;
-};
-FORGE_API FHttpGet Http_Get(const FString& Url);
-
-///////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////
-
 class FORGE_API FHttpPost
 {
 public:
@@ -251,7 +213,49 @@ private:
 	TMap<FString, FString> QueryParameters;
 	FString PrivateContent;
 };
+
 FORGE_API FHttpPost Http_Post(const FString& Url);
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+
+class FORGE_API FHttpGet
+{
+public:
+	explicit FHttpGet(const FString& Url)
+		: Url(Url)
+	{
+	}
+
+	FHttpGet& Header(const FString& Key, const FString& Value)
+	{
+		check(!Headers.Contains(Key));
+		Headers.Add(Key, Value);
+		return *this;
+	}
+	FHttpGet& QueryParameter(const FString& Key, const FString& Value)
+	{
+		check(!QueryParameters.Contains(Key));
+		QueryParameters.Add(Key, Value);
+		return *this;
+	}
+	FHttpGet& Content(const FString& Value)
+	{
+		PrivateContent = Value;
+		return *this;
+	}
+
+	FString ExecuteAndReturnString();
+	TArray<uint8> ExecuteAndReturnArray();
+
+private:
+	TSharedPtr<IHttpResponse> ExecuteAndReturnResponse();
+	const FString Url;
+	TMap<FString, FString> Headers;
+	TMap<FString, FString> QueryParameters;
+	FString PrivateContent;
+};
 
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
@@ -263,10 +267,6 @@ struct FSlackAttachment
 	FString ImageUrl;
 };
 FORGE_API void PostSlackMessage(
-	const FString& Message,
-	const TArray<FSlackAttachment>& Attachments = {});
-
-FORGE_API void PostFatalSlackMessage(
 	const FString& Message,
 	const TArray<FSlackAttachment>& Attachments = {});
 
